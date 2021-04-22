@@ -247,3 +247,271 @@ yield和sleep区别：是否随时可能再次被调度
 
 
 
+## 第10章、追寻并发的崇高理想-线程安全【工作常用】
+
+死锁
+
+```java
+package com.basic.thread;
+
+public class DeadLock {
+    private static final Object LOCK1 = new Object();
+    private static final Object LOCK2 = new Object();
+
+    /**
+     * <result>
+     *     1
+     *     2
+     * </result>
+     */
+    public static void main(String[] args) {
+        new Thread(new DeadLockRunnable1()).start();
+        new Thread(new DeadLockRunnable2()).start();
+    }
+
+    private static class DeadLockRunnable1 implements Runnable {
+
+        @Override
+        public void run() {
+            synchronized (LOCK1) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("1");
+                synchronized (LOCK2) {
+                    System.out.println("11");
+                }
+            }
+        }
+    }
+
+    private static class DeadLockRunnable2 implements Runnable {
+
+        @Override
+        public void run() {
+            synchronized (LOCK2) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("2");
+                synchronized (LOCK1) {
+                    System.out.println("22");
+                }
+            }
+        }
+    }
+}
+```
+
+对象发布和初始化的时候的安全问题
+
+什么是发布
+
+什么是逸出
+
+- 方法返回一个private对象（private的本意是不让外部访问）
+
+  ```java
+  package com.basic.thread;
+  
+  import java.util.HashMap;
+  import java.util.Map;
+  
+  public class ImplicitEscape {
+      private Map<String,String> states;
+  
+      public ImplicitEscape() {
+          states = new HashMap<>();
+          states.put("1","周一");
+          states.put("2","周二");
+          states.put("3","周三");
+      }
+  
+      public Map<String,String> getStates(){
+          return states;
+      }
+  
+      /**
+       * <result>
+       *     周一
+       *     null
+       * </result>
+       */
+      public static void main(String[] args) {
+          ImplicitEscape implicitEscape = new ImplicitEscape();
+          Map<String, String> states = implicitEscape.getStates();
+          System.out.println(states.get("1"));
+          states.remove("1");
+          System.out.println(states.get("1"));
+      }
+  }
+  ```
+
+- 还未完成初始化（构造函数没完全执行完毕）就把对象提供给外界，比如：
+
+  - 在构造函数中未初始化完毕就this赋值
+
+    ```java
+    package com.basic.thread;
+    
+    /**
+     * 初始化未完毕，就this赋值
+     */
+    public class InitNotFinished {
+        private static Point point;
+    
+        public static void main(String[] args) {
+            new PointMaker().start();
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            if (point != null) {
+                System.out.println(point.toString());
+            }
+        }
+    
+    
+        private static class Point {
+            private final int x;
+            private final int y;
+    
+            public Point(int x, int y) throws InterruptedException {
+                this.x = x;
+                InitNotFinished.point = this;
+                Thread.sleep(100);
+                this.y = y;
+            }
+    
+            @Override
+            public String toString() {
+                return "Point{" +
+                        "x=" + x +
+                        ", y=" + y +
+                        '}';
+            }
+        }
+    
+        private static class PointMaker extends Thread {
+            @Override
+            public void run() {
+                try {
+                    new Point(1, 1);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+    ```
+
+  - 隐式逸出 --- 注册监听事件
+
+    代码忽略
+
+  - 构造函数中运行线程
+
+    ```java
+    package com.basic.thread;
+    
+    import java.util.HashMap;
+    import java.util.Map;
+    
+    public class ImplicitEscape_NewThread {
+        private Map<String,String> states;
+    
+        public ImplicitEscape_NewThread() {
+            new Thread(){
+                @Override
+                public void run() {
+                    states = new HashMap<>();
+                    states.put("1","周一");
+                    states.put("2","周二");
+                    states.put("3","周三");
+                }
+            }.start();
+        }
+    
+        public Map<String,String> getStates(){
+            return states;
+        }
+    
+        /**
+         * <result>
+         *     周一
+         *     null
+         * </result>
+         */
+        public static void main(String[] args) {
+            ImplicitEscape_NewThread implicitEscape = new ImplicitEscape_NewThread();
+            Map<String, String> states = implicitEscape.getStates();
+            System.out.println(states.get("1"));
+            states.remove("1");
+            System.out.println(states.get("1"));
+        }
+    }
+    ```
+
+如何解决逸出的问题
+
+- 返回“副本”；
+- 工厂模式
+
+
+
+需要考虑线程安全的场景
+
+- 访问共享的变量或资源，会有并发风险，比如对象的属性、静态变量、共享缓存、数据库等；
+- 所有依赖时序的操作，即使每一步操作都是线程安全的，还是存在并发问题；
+- 不同的数据之间存在捆绑关系的时候；
+- 我们使用其他类的时候，如果对方没有申明自己是线程安全的，那么大概率会存在并发问题。
+
+
+
+为什么多线程会带来性能问题？
+
+- 调度：上下文切换
+
+  - 什么是上下文
+
+    上下文切换可以认为是内核（操作系统的核心）在CPU上对于进程（包括线程）进行以下的活动，
+
+    - 挂起一个线程，将这个线程在CPU中的状态（上下文）存储在内存中的某处；
+    - 在内存中检索下一个线程的上下文并将其在CPU中的寄存器中恢复；
+    - 跳转到程序计数器所指向的位置（即跳转到线程被中断时的代码行），以恢复该线程。
+
+    
+
+    当可运行的线程数超过了CPU核心数时，为了使每个线程都有机会运行，就需要进行上下文切换。
+
+  - 缓存开销
+
+    经过上下文切换，对原有线程的缓存就失效了，这个时候CPU就需要重新进行缓存
+
+  - 何时会导致密集的上下文切换
+
+    频繁竞争锁、IO、频繁的线程阻塞
+
+- 协作：内存同步
+
+  Java内存模型 -- 为了数据的正确性，同步手段往往会使用禁止编译器优化、使CPU内的缓存失效。
+
+  指令重排序，让缓存能利用的机会更多；
+
+  JVM会对锁进行优化，比如发现有些锁是没有必要的，把锁自动删除
+
+
+
+常见面试问题
+
+- 你知道有哪些线程不安全的情况？
+- 平时哪些情况下需要额外注意线程安全问题？
+- 什么是多线程的上下文切换？
+
+
+
